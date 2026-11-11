@@ -1,15 +1,6 @@
 """
-ZYRO Complete Fix Pack
+ZYRO Fix - Simple Reliable Version
 Development by ARIAN
-
-Upload this ONE file into cogs/ folder and redeploy.
-It will:
-1. Replace broken Help (no error/poop image)
-2. Add No-Prefix system  (+np add @user 10m)
-3. Add DM Access system  (+dmaccess @user 10m) + (+dm @user message)
-4. Improve Music search (multiple fallbacks)
-5. Better temp VC naming style
-6. Premium lock remove
 """
 
 import discord
@@ -20,262 +11,170 @@ import time
 import re
 import aiosqlite
 from pathlib import Path
-from emojis import CHECK, CROSS, INFO, MUSIC, STAR, FIRE, ZYRO, VOICE, LOADING
 
-# ====================== DATABASE ======================
-DB_PATH = Path("db/zyro_fix.db")
+# Safe import
+try:
+    from emojis import CHECK, CROSS, INFO, MUSIC, STAR, FIRE, ZYRO
+except Exception:
+    CHECK = "✅"
+    CROSS = "❌"
+    INFO = "ℹ️"
+    MUSIC = "🎵"
+    STAR = "✦"
+    FIRE = "🔥"
+    ZYRO = "⚡"
 
-async def init_db():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS noprefix (
-                user_id INTEGER PRIMARY KEY,
-                expires REAL
-            )
-        """)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS dm_access (
-                user_id INTEGER PRIMARY KEY,
-                expires REAL
-            )
-        """)
-        await db.commit()
+DB = Path("db/zyro_extra.db")
 
-def parse_time(time_str: str) -> int:
-    """Parse 3m / 10m / 1h / 2d into seconds"""
-    time_str = time_str.lower().strip()
-    match = re.match(r"^(\d+)(s|m|h|d)$", time_str)
-    if not match:
+def parse_time(t: str):
+    t = t.lower().strip()
+    m = re.match(r"^(\d+)(s|m|h|d)$", t)
+    if not m:
         return None
-    val, unit = int(match.group(1)), match.group(2)
-    mult = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    return val * mult[unit]
+    val, unit = int(m.group(1)), m.group(2)
+    return val * {"s": 1, "m": 60, "h": 3600, "d": 86400}[unit]
 
 
 class ZyroFix(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot):
         self.bot = bot
-        self.bot.loop.create_task(self._setup())
+        print("[ZYRO FIX] Cog __init__ called")
 
-    async def _setup(self):
-        await init_db()
+    async def cog_load(self):
+        print("[ZYRO FIX] cog_load started")
+        Path("db").mkdir(exist_ok=True)
+        async with aiosqlite.connect(DB) as db:
+            await db.execute("CREATE TABLE IF NOT EXISTS noprefix (user_id INTEGER PRIMARY KEY, expires REAL)")
+            await db.execute("CREATE TABLE IF NOT EXISTS dmaccess (user_id INTEGER PRIMARY KEY, expires REAL)")
+            await db.commit()
+
         # Remove premium lock
-        to_remove = [c for c in list(self.bot._checks) if getattr(c, "__name__", "") == "premium_global_lock"]
-        for c in to_remove:
-            self.bot.remove_check(c)
-        print("[ZYRO FIX] Premium lock removed + DB ready")
+        removed = 0
+        for check in list(self.bot._checks):
+            if getattr(check, "__name__", "") == "premium_global_lock":
+                self.bot.remove_check(check)
+                removed += 1
+        print(f"[ZYRO FIX] Premium checks removed: {removed}")
 
-        # Remove old help
-        try:
-            self.bot.remove_command("help")
-        except Exception:
-            pass
+        # Force remove old help
+        for name in ("help", "h", "commands"):
+            try:
+                self.bot.remove_command(name)
+            except Exception:
+                pass
+        print("[ZYRO FIX] Old help removed")
 
+        self.bot.loop.create_task(self._delayed_sync())
+        print("[ZYRO FIX] Loaded successfully ✓")
+
+    async def _delayed_sync(self):
         await self.bot.wait_until_ready()
+        await asyncio.sleep(3)
         try:
-            await self.bot.tree.sync()
-            print("[ZYRO FIX] Slash synced")
+            synced = await self.bot.tree.sync()
+            print(f"[ZYRO FIX] Slash commands synced: {len(synced)}")
         except Exception as e:
-            print(f"[ZYRO FIX] Sync error: {e}")
+            print(f"[ZYRO FIX] Sync failed: {e}")
 
-    # ====================== NO PREFIX SYSTEM ======================
-    async def has_noprefix(self, user_id: int) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT expires FROM noprefix WHERE user_id = ?", (user_id,)) as cur:
-                row = await cur.fetchone()
-        if not row:
-            return False
-        if row[0] < time.time():
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("DELETE FROM noprefix WHERE user_id = ?", (user_id,))
-                await db.commit()
-            return False
-        return True
+    # ========== TEST COMMAND (to confirm cog is loaded) ==========
+    @commands.command(name="zyro")
+    async def zyro_test(self, ctx):
+        await ctx.send(f"{CHECK} **ZYRO Fix is LOADED and working!**\nDevelopment by ARIAN")
 
-    @commands.group(name="np", invoke_without_command=True)
-    @commands.is_owner()
-    async def np_group(self, ctx: commands.Context):
-        await ctx.send(f"{INFO} Usage:\n`+np add @user 10m`\n`+np remove @user`\n`+np list`")
-
-    @np_group.command(name="add")
-    @commands.is_owner()
-    async def np_add(self, ctx: commands.Context, user: discord.Member, duration: str):
-        seconds = parse_time(duration)
-        if not seconds:
-            return await ctx.send(f"{CROSS} Invalid time. Use `3m` `10m` `1h` `2d`")
-        expires = time.time() + seconds
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("INSERT OR REPLACE INTO noprefix (user_id, expires) VALUES (?, ?)", (user.id, expires))
-            await db.commit()
-        await ctx.send(f"{CHECK} No-Prefix access given to {user.mention} for **{duration}**")
-
-    @np_group.command(name="remove")
-    @commands.is_owner()
-    async def np_remove(self, ctx: commands.Context, user: discord.Member):
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("DELETE FROM noprefix WHERE user_id = ?", (user.id,))
-            await db.commit()
-        await ctx.send(f"{CHECK} No-Prefix removed from {user.mention}")
-
-    @np_group.command(name="list")
-    @commands.is_owner()
-    async def np_list(self, ctx: commands.Context):
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT user_id, expires FROM noprefix") as cur:
-                rows = await cur.fetchall()
-        if not rows:
-            return await ctx.send(f"{INFO} No one has No-Prefix access.")
-        lines = []
-        for uid, exp in rows:
-            left = int(exp - time.time())
-            if left > 0:
-                lines.append(f"<@{uid}> — `{left//60}m left`")
-        await ctx.send("**No-Prefix Users:**\n" + "\n".join(lines) if lines else f"{INFO} None active.")
-
-    # Listener for no-prefix
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot or not message.guild:
-            return
-        if await self.has_noprefix(message.author.id):
-            # Allow commands without prefix
-            ctx = await self.bot.get_context(message)
-            if ctx.command is None:
-                # Try forcing prefix empty
-                prefixes = await self.bot.get_prefix(message)
-                if isinstance(prefixes, str):
-                    prefixes = [prefixes]
-                for p in prefixes:
-                    if message.content.startswith(p):
-                        return  # already has prefix
-                # Manually invoke if it looks like a command
-                content = message.content.strip()
-                if content:
-                    # Create a fake message with prefix
-                    message.content = f"+{content}"
-                    await self.bot.process_commands(message)
-
-    # ====================== DM ACCESS SYSTEM ======================
-    async def has_dm_access(self, user_id: int) -> bool:
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT expires FROM dm_access WHERE user_id = ?", (user_id,)) as cur:
-                row = await cur.fetchone()
-        if not row:
-            return False
-        if row[0] < time.time():
-            async with aiosqlite.connect(DB_PATH) as db:
-                await db.execute("DELETE FROM dm_access WHERE user_id = ?", (user_id,))
-                await db.commit()
-            return False
-        return True
-
-    @commands.command(name="dmaccess", aliases=["dmacc"])
-    @commands.is_owner()
-    async def dmaccess(self, ctx: commands.Context, user: discord.Member, duration: str):
-        seconds = parse_time(duration)
-        if not seconds:
-            return await ctx.send(f"{CROSS} Invalid time. Example: `8m` `1h`")
-        expires = time.time() + seconds
-        async with aiosqlite.connect(DB_PATH) as db:
-            await db.execute("INSERT OR REPLACE INTO dm_access (user_id, expires) VALUES (?, ?)", (user.id, expires))
-            await db.commit()
-        await ctx.send(f"{CHECK} DM Access given to {user.mention} for **{duration}**\nThey can now use `+dm @user message`")
-
-    @commands.command(name="dm")
-    async def dm_cmd(self, ctx: commands.Context, user: discord.Member, *, message: str):
-        if not await self.has_dm_access(ctx.author.id) and not await self.bot.is_owner(ctx.author):
-            return await ctx.send(f"{CROSS} You don't have DM Access.\nOwner can give with `+dmaccess @you 10m`")
-        try:
-            await user.send(f"**Message from {ctx.author} via ZYRO:**\n{message}")
-            await ctx.send(f"{CHECK} Message sent to {user.mention}'s DM")
-        except discord.Forbidden:
-            await ctx.send(f"{CROSS} Cannot DM that user (DMs closed or blocked).")
-        except Exception as e:
-            await ctx.send(f"{CROSS} Failed: {e}")
-
-    # ====================== CLEAN HELP (NO IMAGE) ======================
-    @commands.command(name="help", aliases=["h", "commands"])
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def clean_help(self, ctx: commands.Context, category: str = None):
-        prefix = ctx.prefix
-
-        categories = {
-            "mod": f"`{prefix}ban` `{prefix}kick` `{prefix}mute` `{prefix}unmute` `{prefix}purge` `{prefix}lock` `{prefix}unlock` `{prefix}snipe`",
-            "antinuke": f"`{prefix}antinuke` `{prefix}antinuke enable` `{prefix}antinuke disable` `{prefix}whitelist` / `{prefix}wl` `{prefix}extraowner`",
-            "music": f"`{prefix}play <name>` `{prefix}skip` `{prefix}queue` `{prefix}np` `{prefix}volume` `{prefix}join` `{prefix}leave`",
-            "voice": f"`{prefix}voicemaster setup` — then join the interface channel",
-            "utility": f"`{prefix}ping` `{prefix}stats` `{prefix}avatar` `{prefix}userinfo` `{prefix}steal` `{prefix}afk` `{prefix}setprefix`",
-            "owner": f"`{prefix}np add @user 10m` `{prefix}dmaccess @user 10m` `{prefix}dm @user message`",
-        }
-
-        if category and category.lower() in categories:
-            embed = discord.Embed(title=f"{ZYRO} {category.title()}", description=categories[category.lower()], color=0x5865F2)
-            embed.set_footer(text="Development by ARIAN")
-            return await ctx.send(embed=embed)
+    # ========== CLEAN HELP ==========
+    @commands.command(name="help", aliases=["h"])
+    async def help_cmd(self, ctx, category: str = None):
+        p = ctx.prefix
+        if category:
+            maps = {
+                "mod": f"`{p}ban` `{p}kick` `{p}mute` `{p}purge` `{p}lock`",
+                "music": f"`{p}play <song>` `{p}skip` `{p}queue` `{p}join` `{p}leave`",
+                "antinuke": f"`{p}antinuke enable` `{p}whitelist` `{p}wl`",
+                "owner": f"`{p}np add @user 10m` `{p}dmaccess @user 10m` `{p}dm @user msg`",
+            }
+            text = maps.get(category.lower(), "Unknown category")
+            return await ctx.send(embed=discord.Embed(title=category.title(), description=text, color=0x5865F2))
 
         embed = discord.Embed(
             title=f"{ZYRO} ZYRO Help",
             description=(
-                f"**Prefix:** `{prefix}`\n"
+                f"**Prefix:** `{p}`\n"
                 f"**Development by ARIAN**\n\n"
-                f"**Categories** (type after help):\n"
-                f"`{prefix}help mod`\n"
-                f"`{prefix}help antinuke`\n"
-                f"`{prefix}help music`\n"
-                f"`{prefix}help voice`\n"
-                f"`{prefix}help utility`\n"
-                f"`{prefix}help owner`\n\n"
-                f"{FIRE} Premium lock removed"
+                f"`{p}help mod`\n"
+                f"`{p}help music`\n"
+                f"`{p}help antinuke`\n"
+                f"`{p}help owner`\n\n"
+                f"Test: `{p}zyro`"
             ),
             color=0x5865F2
         )
-        embed.set_footer(text="ZYRO • Clean Help • No broken images")
         await ctx.send(embed=embed)
 
-    # ====================== IMPROVED MUSIC PLAY (MULTI SEARCH) ======================
-    @commands.command(name="play", aliases=["p"])
-    async def better_play(self, ctx: commands.Context, *, query: str = None):
-        if not query:
-            return await ctx.send(f"{CROSS} Usage: `{ctx.prefix}play <song name or url>`")
-
-        # Let the original music cog handle if possible, otherwise we try harder
-        music_cog = self.bot.get_cog("Music")
-        if music_cog and hasattr(music_cog, "play"):
-            # Call original but we already have multi search inside music.py
-            # Just make sure user gets feedback
-            await ctx.invoke(music_cog.play, query=query)
-        else:
-            await ctx.send(f"{CROSS} Music system not loaded. Redeploy with latest music.py")
-
-    # ====================== TEMP VC NAME FIX (listener) ======================
-    @commands.Cog.listener()
-    async def on_voice_state_update(self, member, before, after):
-        # This runs alongside original VoiceMaster.
-        # We only fix naming if a new channel was just created with bad name.
-        if after.channel and after.channel.name.endswith("'s VC"):
-            try:
-                nice_name = f"{member.display_name}'s Channel"
-                if after.channel.name != nice_name and len(nice_name) <= 100:
-                    await after.channel.edit(name=nice_name)
-            except Exception:
-                pass
-
-    # ====================== UTILITY ======================
-    @commands.command(name="fixstatus")
+    # ========== NO PREFIX ==========
+    @commands.command(name="np")
     @commands.is_owner()
-    async def fixstatus(self, ctx: commands.Context):
+    async def np(self, ctx, action: str = None, user: discord.Member = None, duration: str = None):
+        if action == "add" and user and duration:
+            sec = parse_time(duration)
+            if not sec:
+                return await ctx.send(f"{CROSS} Use time like `10m` `1h` `2d`")
+            async with aiosqlite.connect(DB) as db:
+                await db.execute("INSERT OR REPLACE INTO noprefix VALUES (?, ?)", (user.id, time.time() + sec))
+                await db.commit()
+            return await ctx.send(f"{CHECK} No-Prefix given to {user.mention} for **{duration}**")
+        if action == "remove" and user:
+            async with aiosqlite.connect(DB) as db:
+                await db.execute("DELETE FROM noprefix WHERE user_id=?", (user.id,))
+                await db.commit()
+            return await ctx.send(f"{CHECK} Removed from {user.mention}")
+        await ctx.send(f"{INFO} `{ctx.prefix}np add @user 10m`\n`{ctx.prefix}np remove @user`")
+
+    # ========== DM ACCESS ==========
+    @commands.command(name="dmaccess")
+    @commands.is_owner()
+    async def dmaccess(self, ctx, user: discord.Member, duration: str):
+        sec = parse_time(duration)
+        if not sec:
+            return await ctx.send(f"{CROSS} Use `10m` / `1h` etc")
+        async with aiosqlite.connect(DB) as db:
+            await db.execute("INSERT OR REPLACE INTO dmaccess VALUES (?, ?)", (user.id, time.time() + sec))
+            await db.commit()
+        await ctx.send(f"{CHECK} DM Access given to {user.mention} for **{duration}**")
+
+    @commands.command(name="dm")
+    async def dm(self, ctx, user: discord.Member, *, msg: str):
+        allowed = False
+        if await self.bot.is_owner(ctx.author):
+            allowed = True
+        else:
+            async with aiosqlite.connect(DB) as db:
+                async with db.execute("SELECT expires FROM dmaccess WHERE user_id=?", (ctx.author.id,)) as cur:
+                    row = await cur.fetchone()
+            if row and row[0] > time.time():
+                allowed = True
+        if not allowed:
+            return await ctx.send(f"{CROSS} No DM Access. Owner can give with `+dmaccess @you 10m`")
+        try:
+            await user.send(f"**From {ctx.author} via ZYRO:**\n{msg}")
+            await ctx.send(f"{CHECK} Sent to {user.mention}")
+        except Exception:
+            await ctx.send(f"{CROSS} Could not DM that user.")
+
+    # ========== FIXSTATUS ==========
+    @commands.command(name="fixstatus")
+    async def fixstatus(self, ctx):
         await ctx.send(
-            f"{CHECK} **ZYRO Fix Pack Active**\n"
-            f"• Clean Help (no image error)\n"
-            f"• No-Prefix system (`+np add`)\n"
-            f"• DM Access system (`+dmaccess` + `+dm`)\n"
-            f"• Better Music search\n"
-            f"• Temp VC name → `Name's Channel`\n"
-            f"• Premium lock removed\n\n"
+            f"{CHECK} **ZYRO Fix is Active**\n"
+            f"Commands available:\n"
+            f"`+zyro`  ← test command\n"
+            f"`+help`  ← clean help\n"
+            f"`+np add @user 10m`\n"
+            f"`+dmaccess @user 10m`\n"
+            f"`+dm @user message`\n"
             f"**Development by ARIAN**"
         )
 
-async def setup(bot: commands.Bot):
+
+async def setup(bot):
     await bot.add_cog(ZyroFix(bot))
-    print("[ZYRO FIX] Complete Fix Pack loaded")
+    print("[ZYRO FIX] setup() completed")
