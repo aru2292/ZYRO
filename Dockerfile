@@ -1,26 +1,22 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
 
-# System packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    libffi-dev \
-    libnacl-dev \
-    gcc \
-    unzip \
+    ffmpeg libopus0 libsodium23 unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# ZIP ফাইল কপি করে আনজিপ করা
-COPY ZYRO-Bot.zip .
-RUN unzip ZYRO-Bot.zip && \
-    mv ZYRO-Bot/* . && \
-    rm -rf ZYRO-Bot ZYRO-Bot.zip
+# repo-r sob file (zip shoho) copy
+COPY . /repo
 
-# Dependencies ইনস্টল
-RUN pip install --no-cache-dir -r requirements.txt
+# repo-r vitor jotogulo .zip ache sob unzip kore /app e rakho
+RUN set -e; \
+    mkdir -p /tmp/x /app; \
+    for z in /repo/*.zip; do unzip -oq "$z" -d /tmp/x; done; \
+    MAIN=$(find /tmp/x -name main.py | head -n1); \
+    cp -r "$(dirname "$MAIN")"/. /app/
 
-# db ফোল্ডার তৈরি
-RUN mkdir -p db
+WORKDIR /app
+RUN pip install -r requirements.txt
 
 CMD ["python", "main.py"]
