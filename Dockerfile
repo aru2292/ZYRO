@@ -8,7 +8,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY . /repo
 
-# repo-r sob .zip (nam-e space thakleo cholbe) unzip kore bot chalu korar jonno /app e rakhe
 RUN set -e; mkdir -p /app /tmp/x; \
     find /repo -maxdepth 1 -iname '*.zip' -print0 | LC_ALL=C sort -z | xargs -0 -r -I{} unzip -oq {} -d /tmp/x; \
     MAIN=$(find /tmp/x -maxdepth 2 -name main.py | head -n1); \
