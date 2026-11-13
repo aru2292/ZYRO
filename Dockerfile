@@ -6,18 +6,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libopus0 libsodium23 unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# copy whole repo
 COPY . /repo
 
-# unzip every .zip in repo root (alphabetical; later zip overwrites earlier), else use repo files directly
+# repo-r sob .zip (nam-e space thakleo cholbe) unzip kore bot chalu korar jonno /app e rakhe
 RUN set -e; mkdir -p /app /tmp/x; \
-    if ls /repo/*.zip >/dev/null 2>&1; then \
-        for z in $(ls /repo/*.zip | sort); do unzip -oq "$z" -d /tmp/x; done; \
-        MAIN=$(find /tmp/x -name main.py -not -path '*/node_modules/*' | head -n1); \
-        cp -r "$(dirname "$MAIN")"/. /app/; \
-    else \
-        cp -r /repo/. /app/; \
-    fi
+    find /repo -maxdepth 1 -iname '*.zip' -print0 | LC_ALL=C sort -z | xargs -0 -r -I{} unzip -oq {} -d /tmp/x; \
+    MAIN=$(find /tmp/x -maxdepth 2 -name main.py | head -n1); \
+    if [ -n "$MAIN" ]; then cp -r "$(dirname "$MAIN")"/. /app/; else cp -r /repo/. /app/; fi; \
+    test -f /app/main.py
 
 WORKDIR /app
 RUN pip install -r requirements.txt
